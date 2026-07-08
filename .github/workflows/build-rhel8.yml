@@ -42,12 +42,8 @@ jobs:
             findutils \
             cmake \
             clang \
-            ninja-build \
-            patch \
-            perl \
             pkgconf-pkg-config \
             python3 \
-            unzip \
             openssl-devel \
             fontconfig-devel \
             freetype-devel \
@@ -68,19 +64,26 @@ jobs:
             mesa-libEGL-devel \
             vulkan-loader \
             vulkan-loader-devel \
-            wayland-devel \
-            zip
+            wayland-devel
+
+          dnf -y install \
+            gcc-toolset-13-gcc \
+            gcc-toolset-13-gcc-c++ \
+            gcc-toolset-13-libstdc++-devel \
+            gcc-toolset-13-libstdc++-static || \
+          dnf -y install \
+            gcc-toolset-12-gcc \
+            gcc-toolset-12-gcc-c++ \
+            gcc-toolset-12-libstdc++-devel \
+            gcc-toolset-12-libstdc++-static || \
+          dnf -y install \
+            gcc-toolset-11-gcc \
+            gcc-toolset-11-gcc-c++ \
+            gcc-toolset-11-libstdc++-devel \
+            gcc-toolset-11-libstdc++-static
 
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Checkout rust-skia sources
-        uses: actions/checkout@v4
-        with:
-          repository: rust-skia/rust-skia
-          ref: 0.97.2
-          path: rust-skia
-          submodules: recursive
 
       - name: Install Rust stable
         run: |
@@ -100,8 +103,8 @@ jobs:
           text = cargo_toml.read_text()
           old = 'skia-safe = { version = "0.97.2", features = ["gl", "textlayout"] }'
           new = (
-              'skia-safe = { version = "0.97.2", default-features = false, '
-              'features = ["gl", "textlayout", "embed-icudtl", "pdf", "jpeg", "embed-freetype"] }'
+              'skia-safe = { version = "0.97.2", '
+              'features = ["gl", "textlayout", "embed-freetype"] }'
           )
 
           if old not in text:
@@ -112,37 +115,23 @@ jobs:
 
           grep -n 'skia-safe' Cargo.toml
 
-      - name: Prepare Skia source dependencies
-        run: |
-          SKIA_SOURCE_DIR="$GITHUB_WORKSPACE/rust-skia/skia-bindings"
-
-          git clone --depth 1 \
-            https://chromium.googlesource.com/chromium/tools/depot_tools.git \
-            "$GITHUB_WORKSPACE/depot_tools"
-
-          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
-          cd "$SKIA_SOURCE_DIR"
-          test -x "$SKIA_SOURCE_DIR/skia/tools/git-sync-deps"
-          GIT_SYNC_DEPS_PATH=skia/DEPS \
-            GIT_SYNC_DEPS_SKIP_EMSDK=1 \
-            python3 skia/tools/git-sync-deps
-
-          echo "PATH=$GITHUB_WORKSPACE/depot_tools:$PATH" >> "$GITHUB_ENV"
-          echo "SKIA_SOURCE_DIR=$SKIA_SOURCE_DIR" >> "$GITHUB_ENV"
-          echo "SKIA_GN_COMMAND=$GITHUB_WORKSPACE/depot_tools/gn" >> "$GITHUB_ENV"
-          echo "SKIA_NINJA_COMMAND=$(command -v ninja)" >> "$GITHUB_ENV"
-
-          "$GITHUB_WORKSPACE/depot_tools/gn" --version
-          ninja --version
-
       - name: Build Neovide
         run: |
           . "$HOME/.cargo/env"
+          source /opt/rh/gcc-toolset-13/enable || \
+            source /opt/rh/gcc-toolset-12/enable || \
+            source /opt/rh/gcc-toolset-11/enable
+          export RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc"
+          gcc --version
+          g++ --version
           cargo build --release
 
       - name: Generate compatibility reports
         run: |
           . "$HOME/.cargo/env"
+          source /opt/rh/gcc-toolset-13/enable || \
+            source /opt/rh/gcc-toolset-12/enable || \
+            source /opt/rh/gcc-toolset-11/enable
           mkdir -p reports
 
           cp /etc/os-release reports/os-release.txt
