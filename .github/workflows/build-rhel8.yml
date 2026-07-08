@@ -124,9 +124,41 @@ jobs:
             source /opt/rh/gcc-toolset-13/enable || \
             source /opt/rh/gcc-toolset-12/enable || \
             source /opt/rh/gcc-toolset-11/enable
+
+          mkdir -p "$PWD/.ci-bin"
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          template = dedent("""\
+              #!/usr/bin/env bash
+              args=()
+              for arg in "$@"; do
+                case "$arg" in
+                  --target=x86_64-linux-gnu) ;;
+                  *) args+=("$arg") ;;
+                esac
+              done
+              exec {real_compiler} "${{args[@]}}"
+          """)
+
+          Path(".ci-bin/clang").write_text(
+              template.replace("{real_compiler}", "/usr/bin/clang")
+          )
+          Path(".ci-bin/clang++").write_text(
+              template.replace("{real_compiler}", "/usr/bin/clang++")
+          )
+          PY
+          chmod +x "$PWD/.ci-bin/clang" "$PWD/.ci-bin/clang++"
+          export PATH="$PWD/.ci-bin:$PATH"
+
           export RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc"
           gcc --version
           g++ --version
+          command -v clang++
+          clang++ --version
+          printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
+            clang++ --target=x86_64-linux-gnu -std=c++20 -x c++ - -o /tmp/probe-clang-target
           cargo build --release
 
       - name: Generate compatibility reports
