@@ -74,6 +74,14 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Checkout rust-skia sources
+        uses: actions/checkout@v4
+        with:
+          repository: rust-skia/rust-skia
+          ref: 0.97.2
+          path: rust-skia
+          submodules: recursive
+
       - name: Install Rust stable
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
@@ -105,8 +113,11 @@ jobs:
           grep -n 'skia-safe' Cargo.toml
 
       - name: Build Neovide
+        env:
+          SKIA_SOURCE_DIR: ${{ github.workspace }}/rust-skia/skia-bindings
         run: |
           . "$HOME/.cargo/env"
+          test -x "$SKIA_SOURCE_DIR/skia/tools/git-sync-deps"
           cargo build --release
 
       - name: Generate compatibility reports
