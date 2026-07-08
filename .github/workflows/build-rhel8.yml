@@ -42,8 +42,12 @@ jobs:
             findutils \
             cmake \
             clang \
+            ninja-build \
+            patch \
+            perl \
             pkgconf-pkg-config \
             python3 \
+            unzip \
             openssl-devel \
             fontconfig-devel \
             freetype-devel \
@@ -64,7 +68,8 @@ jobs:
             mesa-libEGL-devel \
             vulkan-loader \
             vulkan-loader-devel \
-            wayland-devel
+            wayland-devel \
+            zip
 
       - name: Checkout source
         uses: actions/checkout@v4
@@ -77,6 +82,27 @@ jobs:
           . "$HOME/.cargo/env"
           rustc --version
           cargo --version
+
+      - name: Use RHEL 8 compatible Skia build configuration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cargo_toml = Path("Cargo.toml")
+          text = cargo_toml.read_text()
+          old = 'skia-safe = { version = "0.97.2", features = ["gl", "textlayout"] }'
+          new = (
+              'skia-safe = { version = "0.97.2", default-features = false, '
+              'features = ["gl", "textlayout", "embed-icudtl", "pdf", "jpeg", "embed-freetype"] }'
+          )
+
+          if old not in text:
+              raise SystemExit("Could not find the Linux skia-safe dependency line to patch")
+
+          cargo_toml.write_text(text.replace(old, new, 1))
+          PY
+
+          grep -n 'skia-safe' Cargo.toml
 
       - name: Build Neovide
         run: |
