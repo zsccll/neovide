@@ -139,7 +139,7 @@ jobs:
                   *) args+=("$arg") ;;
                 esac
               done
-              exec {real_compiler} "${{args[@]}}"
+              exec {real_compiler} "${args[@]}"
           """)
 
           Path(".ci-bin/clang").write_text(
