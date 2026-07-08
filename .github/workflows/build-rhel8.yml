@@ -2,15 +2,13 @@ name: Build Neovide for RHEL 8
 
 on:
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: "Cargo build profile"
-        required: true
-        default: "release"
-        type: choice
-        options:
-          - release
-          - debug
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build-rhel8:
@@ -24,7 +22,8 @@ jobs:
       - name: Prepare Rocky Linux 8 repositories
         run: |
           dnf -y install dnf-plugins-core
-          dnf config-manager --set-enabled powertools || true
+          dnf config-manager --set-enabled powertools || \
+            dnf config-manager --set-enabled PowerTools || true
           dnf -y update
 
       - name: Install build dependencies
@@ -43,39 +42,37 @@ jobs:
             findutils \
             cmake \
             clang \
-            pkgconf \
             pkgconf-pkg-config \
+            python3 \
             openssl-devel \
             fontconfig-devel \
             freetype-devel \
             expat-devel \
+            bzip2-devel \
             libxcb-devel \
             libxkbcommon-devel \
+            libxkbcommon-x11-devel \
             libX11-devel \
             libXcursor-devel \
             libXi-devel \
             libXrandr-devel \
             libXrender-devel \
             libXext-devel \
+            libXfixes-devel \
+            libXinerama-devel \
             mesa-libGL-devel \
             mesa-libEGL-devel \
             vulkan-loader \
             vulkan-loader-devel \
             wayland-devel
 
-      - name: Check system ABI baseline
-        run: |
-          cat /etc/os-release
-          ldd --version
-          gcc --version
-          g++ --version
-
       - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Install Rust stable
         run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           . "$HOME/.cargo/env"
           rustc --version
@@ -84,60 +81,87 @@ jobs:
       - name: Build Neovide
         run: |
           . "$HOME/.cargo/env"
+          cargo build --release
 
-          if [ "${{ inputs.build_type }}" = "release" ]; then
-            cargo build --release
-          else
-            cargo build
-          fi
-
-      - name: Select binary
+      - name: Generate compatibility reports
         run: |
-          if [ "${{ inputs.build_type }}" = "release" ]; then
-            echo "NEOVIDE_BIN=target/release/neovide" >> "$GITHUB_ENV"
-          else
-            echo "NEOVIDE_BIN=target/debug/neovide" >> "$GITHUB_ENV"
-          fi
+          . "$HOME/.cargo/env"
+          mkdir -p reports
 
-      - name: Inspect binary compatibility
-        run: |
-          mkdir -p dist reports
-
-          file "$NEOVIDE_BIN" | tee reports/file.txt
-          ldd "$NEOVIDE_BIN" | tee reports/ldd.txt
+          cp /etc/os-release reports/os-release.txt
 
           {
-            echo "## OS"
-            cat /etc/os-release
+            echo "## Rust"
+            rustc --version --verbose
             echo
-
+            cargo --version --verbose
+            echo
+            echo "## C toolchain"
+            gcc --version
+            echo
+            g++ --version
+            echo
+            clang --version
+            echo
             echo "## glibc"
-            ldd --version | head -1
-            echo
+            ldd --version
+          } | tee reports/toolchain.txt
 
-            echo "## binary"
-            file "$NEOVIDE_BIN"
-            echo
+          file target/release/neovide | tee reports/file.txt
+          ldd target/release/neovide | tee reports/ldd.txt
 
-            echo "## required GLIBC symbols"
-            strings "$NEOVIDE_BIN" | grep -o 'GLIBC_[0-9.]*' | sort -Vu || true
-            echo
+          strings target/release/neovide | \
+            grep -o 'GLIBC_[0-9.]*' | sort -Vu > reports/glibc-symbols.txt || true
+          strings target/release/neovide | \
+            grep -o 'GLIBCXX_[0-9.]*' | sort -Vu > reports/glibcxx-symbols.txt || true
 
-            echo "## required GLIBCXX symbols"
-            strings "$NEOVIDE_BIN" | grep -o 'GLIBCXX_[0-9.]*' | sort -Vu || true
+          {
+            echo "# Neovide RHEL 8 Compatibility Report"
             echo
-
-            echo "## ldd"
-            ldd "$NEOVIDE_BIN"
-          } | tee reports/rhel8-compat-report.txt
+            echo "## Build OS"
+            cat reports/os-release.txt
+            echo
+            echo "## Toolchain"
+            cat reports/toolchain.txt
+            echo
+            echo "## Binary"
+            cat reports/file.txt
+            echo
+            echo "## Required GLIBC symbols"
+            cat reports/glibc-symbols.txt
+            echo
+            echo "## Required GLIBCXX symbols"
+            cat reports/glibcxx-symbols.txt
+            echo
+            echo "## Dynamic dependencies"
+            cat reports/ldd.txt
+          } > reports/rhel8-compat-report.txt
 
       - name: Package artifact
         run: |
           mkdir -p dist/neovide-rhel8-x86_64
 
-          cp "$NEOVIDE_BIN" dist/neovide-rhel8-x86_64/neovide
+          cp target/release/neovide dist/neovide-rhel8-x86_64/neovide
           cp reports/rhel8-compat-report.txt dist/neovide-rhel8-x86_64/
           chmod +x dist/neovide-rhel8-x86_64/neovide
+
+          cat > dist/neovide-rhel8-x86_64/README.txt <<'EOF'
+          Neovide RHEL 8 x86_64 build
+          ============================
+
+          This binary was built in a Rocky Linux 8 container to keep the glibc
+          baseline close to RHEL 8.10 / glibc 2.28.
+
+          Install:
+            tar -xzf neovide-rhel8-x86_64.tar.gz
+            install -m 0755 neovide-rhel8-x86_64/neovide ~/.local/bin/neovide
+
+          Runtime notes:
+            - Neovim must be installed separately and available as nvim.
+            - A Linux desktop session with X11 or Wayland and working OpenGL/Vulkan
+              graphics drivers is required.
+            - See rhel8-compat-report.txt for ldd, file, and glibc symbol checks.
+          EOF
 
           tar -C dist -czf neovide-rhel8-x86_64.tar.gz neovide-rhel8-x86_64
 
