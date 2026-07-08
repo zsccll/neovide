@@ -112,12 +112,32 @@ jobs:
 
           grep -n 'skia-safe' Cargo.toml
 
+      - name: Prepare Skia source dependencies
+        run: |
+          SKIA_SOURCE_DIR="$GITHUB_WORKSPACE/rust-skia/skia-bindings"
+
+          git clone --depth 1 \
+            https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+            "$GITHUB_WORKSPACE/depot_tools"
+
+          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
+          cd "$SKIA_SOURCE_DIR"
+          test -x "$SKIA_SOURCE_DIR/skia/tools/git-sync-deps"
+          GIT_SYNC_DEPS_PATH=skia/DEPS \
+            GIT_SYNC_DEPS_SKIP_EMSDK=1 \
+            python3 skia/tools/git-sync-deps
+
+          echo "PATH=$GITHUB_WORKSPACE/depot_tools:$PATH" >> "$GITHUB_ENV"
+          echo "SKIA_SOURCE_DIR=$SKIA_SOURCE_DIR" >> "$GITHUB_ENV"
+          echo "SKIA_GN_COMMAND=$GITHUB_WORKSPACE/depot_tools/gn" >> "$GITHUB_ENV"
+          echo "SKIA_NINJA_COMMAND=$(command -v ninja)" >> "$GITHUB_ENV"
+
+          "$GITHUB_WORKSPACE/depot_tools/gn" --version
+          ninja --version
+
       - name: Build Neovide
-        env:
-          SKIA_SOURCE_DIR: ${{ github.workspace }}/rust-skia/skia-bindings
         run: |
           . "$HOME/.cargo/env"
-          test -x "$SKIA_SOURCE_DIR/skia/tools/git-sync-deps"
           cargo build --release
 
       - name: Generate compatibility reports
