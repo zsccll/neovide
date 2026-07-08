@@ -142,23 +142,28 @@ jobs:
             echo
 
             echo "## libstdc++ GLIBCXX symbols"
-            strings "$(g++ -print-file-name=libstdc++.so)" | grep -o 'GLIBCXX_[0-9.]*' | sort -Vu | tail -20
+            LIBSTDCXX="$(g++ -print-file-name=libstdc++.so)"
+            echo "$LIBSTDCXX"
+            strings "$LIBSTDCXX" | grep -o 'GLIBCXX_[0-9.]*' | sort -Vu | tail -20 || true
             echo
 
             echo "## C++20 <bit> with g++"
-            printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
-              g++ -std=c++20 -x c++ - -o /tmp/probe-gxx
-            /tmp/probe-gxx
-            file /tmp/probe-gxx
-            ldd /tmp/probe-gxx
+            if printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
+              g++ -std=c++20 -x c++ - -o /tmp/probe-gxx; then
+              /tmp/probe-gxx || true
+              file /tmp/probe-gxx || true
+              ldd /tmp/probe-gxx || true
+            else
+              echo "g++ failed"
+            fi
             echo
 
             echo "## C++20 <bit> with clang++ default"
             if printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
               clang++ -std=c++20 -x c++ - -o /tmp/probe-clang-default; then
-              /tmp/probe-clang-default
-              file /tmp/probe-clang-default
-              ldd /tmp/probe-clang-default
+              /tmp/probe-clang-default || true
+              file /tmp/probe-clang-default || true
+              ldd /tmp/probe-clang-default || true
             else
               echo "clang++ default failed"
             fi
@@ -177,9 +182,9 @@ jobs:
             echo "TOOLSET_ROOT=$TOOLSET_ROOT"
             if printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
               clang++ --gcc-toolchain="$TOOLSET_ROOT" -std=c++20 -x c++ - -o /tmp/probe-clang-toolset; then
-              /tmp/probe-clang-toolset
-              file /tmp/probe-clang-toolset
-              ldd /tmp/probe-clang-toolset
+              /tmp/probe-clang-toolset || true
+              file /tmp/probe-clang-toolset || true
+              ldd /tmp/probe-clang-toolset || true
             else
               echo "clang++ with --gcc-toolchain failed"
             fi
