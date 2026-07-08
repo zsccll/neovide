@@ -67,20 +67,21 @@ jobs:
             wayland-devel
 
           dnf -y install \
+            gcc-toolset-15-gcc \
+            gcc-toolset-15-gcc-c++ \
+            gcc-toolset-15-libstdc++-devel || \
+          dnf -y install \
             gcc-toolset-13-gcc \
             gcc-toolset-13-gcc-c++ \
-            gcc-toolset-13-libstdc++-devel \
-            gcc-toolset-13-libstdc++-static || \
+            gcc-toolset-13-libstdc++-devel || \
           dnf -y install \
             gcc-toolset-12-gcc \
             gcc-toolset-12-gcc-c++ \
-            gcc-toolset-12-libstdc++-devel \
-            gcc-toolset-12-libstdc++-static || \
+            gcc-toolset-12-libstdc++-devel || \
           dnf -y install \
             gcc-toolset-11-gcc \
             gcc-toolset-11-gcc-c++ \
-            gcc-toolset-11-libstdc++-devel \
-            gcc-toolset-11-libstdc++-static
+            gcc-toolset-11-libstdc++-devel
 
       - name: Checkout source
         uses: actions/checkout@v4
@@ -118,7 +119,8 @@ jobs:
       - name: Build Neovide
         run: |
           . "$HOME/.cargo/env"
-          source /opt/rh/gcc-toolset-13/enable || \
+          source /opt/rh/gcc-toolset-15/enable || \
+            source /opt/rh/gcc-toolset-13/enable || \
             source /opt/rh/gcc-toolset-12/enable || \
             source /opt/rh/gcc-toolset-11/enable
           export RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc"
@@ -129,7 +131,8 @@ jobs:
       - name: Generate compatibility reports
         run: |
           . "$HOME/.cargo/env"
-          source /opt/rh/gcc-toolset-13/enable || \
+          source /opt/rh/gcc-toolset-15/enable || \
+            source /opt/rh/gcc-toolset-13/enable || \
             source /opt/rh/gcc-toolset-12/enable || \
             source /opt/rh/gcc-toolset-11/enable
           mkdir -p reports
