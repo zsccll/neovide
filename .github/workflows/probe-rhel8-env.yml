@@ -1,0 +1,193 @@
+name: Probe RHEL 8 Build Environment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe-rhel8:
+    name: Probe Rocky Linux 8 container
+    runs-on: ubuntu-latest
+
+    container:
+      image: rockylinux:8
+
+    steps:
+      - name: Prepare repositories
+        run: |
+          dnf -y install dnf-plugins-core
+          dnf config-manager --set-enabled powertools || \
+            dnf config-manager --set-enabled PowerTools || true
+          dnf -y update
+
+      - name: Install probe dependencies
+        run: |
+          dnf -y groupinstall "Development Tools"
+
+          dnf -y install \
+            clang \
+            curl \
+            file \
+            findutils \
+            freetype-devel \
+            gcc-toolset-15-gcc \
+            gcc-toolset-15-gcc-c++ \
+            gcc-toolset-15-libstdc++-devel \
+            git \
+            glibc-devel \
+            libstdc++-devel \
+            ninja-build \
+            pkgconf-pkg-config \
+            which || \
+          dnf -y install \
+            clang \
+            curl \
+            file \
+            findutils \
+            freetype-devel \
+            gcc-toolset-13-gcc \
+            gcc-toolset-13-gcc-c++ \
+            gcc-toolset-13-libstdc++-devel \
+            git \
+            glibc-devel \
+            libstdc++-devel \
+            ninja-build \
+            pkgconf-pkg-config \
+            which || \
+          dnf -y install \
+            clang \
+            curl \
+            file \
+            findutils \
+            freetype-devel \
+            gcc-toolset-12-gcc \
+            gcc-toolset-12-gcc-c++ \
+            gcc-toolset-12-libstdc++-devel \
+            git \
+            glibc-devel \
+            libstdc++-devel \
+            ninja-build \
+            pkgconf-pkg-config \
+            which || \
+          dnf -y install \
+            clang \
+            curl \
+            file \
+            findutils \
+            freetype-devel \
+            gcc-toolset-11-gcc \
+            gcc-toolset-11-gcc-c++ \
+            gcc-toolset-11-libstdc++-devel \
+            git \
+            glibc-devel \
+            libstdc++-devel \
+            ninja-build \
+            pkgconf-pkg-config \
+            which
+
+      - name: Probe compiler and library compatibility
+        run: |
+          source /opt/rh/gcc-toolset-15/enable || \
+            source /opt/rh/gcc-toolset-13/enable || \
+            source /opt/rh/gcc-toolset-12/enable || \
+            source /opt/rh/gcc-toolset-11/enable
+
+          mkdir -p reports
+
+          {
+            echo "## OS"
+            cat /etc/os-release
+            echo
+
+            echo "## glibc"
+            ldd --version
+            echo
+
+            echo "## package versions"
+            rpm -q glibc glibc-devel freetype freetype-devel libstdc++ libstdc++-devel || true
+            rpm -qa 'gcc-toolset-*-gcc*' 'gcc-toolset-*-libstdc++*' | sort || true
+            echo
+
+            echo "## tool paths"
+            which gcc
+            which g++
+            which clang
+            which clang++
+            which ninja
+            echo
+
+            echo "## compiler versions"
+            gcc --version
+            echo
+            g++ --version
+            echo
+            clang++ --version
+            echo
+            ninja --version
+            echo
+
+            echo "## freetype pkg-config"
+            pkg-config --modversion freetype2
+            pkg-config --cflags --libs freetype2
+            echo
+
+            echo "## freetype symbols"
+            nm -D /usr/lib64/libfreetype.so | grep -E 'FT_Get_Color_Glyph_Layer|FT_Palette_Data_Get|FT_Palette_Select' || true
+            echo
+
+            echo "## libstdc++ GLIBCXX symbols"
+            strings "$(g++ -print-file-name=libstdc++.so)" | grep -o 'GLIBCXX_[0-9.]*' | sort -Vu | tail -20
+            echo
+
+            echo "## C++20 <bit> with g++"
+            printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
+              g++ -std=c++20 -x c++ - -o /tmp/probe-gxx
+            /tmp/probe-gxx
+            file /tmp/probe-gxx
+            ldd /tmp/probe-gxx
+            echo
+
+            echo "## C++20 <bit> with clang++ default"
+            if printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
+              clang++ -std=c++20 -x c++ - -o /tmp/probe-clang-default; then
+              /tmp/probe-clang-default
+              file /tmp/probe-clang-default
+              ldd /tmp/probe-clang-default
+            else
+              echo "clang++ default failed"
+            fi
+            echo
+
+            echo "## C++20 <bit> with clang++ and gcc-toolchain"
+            TOOLSET_ROOT="${TOOLSET_ROOT:-}"
+            if [ -z "$TOOLSET_ROOT" ]; then
+              for candidate in /opt/rh/gcc-toolset-15/root/usr /opt/rh/gcc-toolset-13/root/usr /opt/rh/gcc-toolset-12/root/usr /opt/rh/gcc-toolset-11/root/usr; do
+                if [ -d "$candidate" ]; then
+                  TOOLSET_ROOT="$candidate"
+                  break
+                fi
+              done
+            fi
+            echo "TOOLSET_ROOT=$TOOLSET_ROOT"
+            if printf '#include <bit>\nint main(){return std::has_single_bit(8u) ? 0 : 1;}\n' | \
+              clang++ --gcc-toolchain="$TOOLSET_ROOT" -std=c++20 -x c++ - -o /tmp/probe-clang-toolset; then
+              /tmp/probe-clang-toolset
+              file /tmp/probe-clang-toolset
+              ldd /tmp/probe-clang-toolset
+            else
+              echo "clang++ with --gcc-toolchain failed"
+            fi
+          } | tee reports/rhel8-env-probe.txt
+
+      - name: Upload probe report
+        uses: actions/upload-artifact@v4
+        with:
+          name: rhel8-env-probe
+          path: reports/
+          if-no-files-found: error
