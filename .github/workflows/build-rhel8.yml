@@ -42,6 +42,7 @@ jobs:
             findutils \
             cmake \
             clang \
+            ninja-build \
             pkgconf-pkg-config \
             python3 \
             openssl-devel \
@@ -151,6 +152,8 @@ jobs:
             g++ --version
             echo
             clang --version
+            echo
+            ninja --version
             echo
             echo "## glibc"
             ldd --version
