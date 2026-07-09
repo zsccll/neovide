@@ -2,9 +2,20 @@ name: Build Neovide for RHEL 8
 
 on:
   workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Optional upstream neovide/neovide tag to build, for example v0.16.2. Leave empty to build this repository ref."
+        required: false
+        type: string
+        default: ""
+      create_release:
+        description: "Create a GitHub Release in this repository after a successful build. Requires upstream_tag."
+        required: true
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write
 
 defaults:
   run:
@@ -84,8 +95,29 @@ jobs:
             gcc-toolset-11-gcc-c++ \
             gcc-toolset-11-libstdc++-devel
 
-      - name: Checkout source
+      - name: Checkout current repository
+        if: ${{ inputs.upstream_tag == '' }}
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout upstream tag
+        if: ${{ inputs.upstream_tag != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: neovide/neovide
+          ref: ${{ inputs.upstream_tag }}
+          fetch-depth: 0
+
+      - name: Validate release inputs
+        if: ${{ inputs.create_release }}
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          if [ -z "$UPSTREAM_TAG" ]; then
+            echo "create_release requires upstream_tag, for example v0.16.2"
+            exit 1
+          fi
 
       - name: Install Rust stable
         run: |
@@ -100,19 +132,47 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           cargo_toml = Path("Cargo.toml")
           text = cargo_toml.read_text()
-          old = 'skia-safe = { version = "0.97.2", features = ["gl", "textlayout"] }'
-          new = (
-              'skia-safe = { version = "0.97.2", '
-              'features = ["gl", "textlayout", "embed-freetype"] }'
-          )
 
-          if old not in text:
+          section = '[target.\'cfg(not(any(target_os = "windows", target_os = "macos")))\'.dependencies]'
+          section_start = text.find(section)
+          if section_start == -1:
+              raise SystemExit("Could not find the Linux target dependency section")
+
+          next_section = text.find("\n[", section_start + len(section))
+          section_end = len(text) if next_section == -1 else next_section
+          before = text[:section_start]
+          linux_section = text[section_start:section_end]
+          after = text[section_end:]
+
+          match = re.search(
+              r'(skia-safe\s*=\s*\{\s*version\s*=\s*"[^"]+"\s*,\s*features\s*=\s*\[)([^\]]*)(\]\s*\})',
+              linux_section,
+          )
+          if not match:
               raise SystemExit("Could not find the Linux skia-safe dependency line to patch")
 
-          cargo_toml.write_text(text.replace(old, new, 1))
+          features = [
+              feature.strip().strip('"')
+              for feature in match.group(2).split(",")
+              if feature.strip()
+          ]
+          if "embed-freetype" not in features:
+              features.append("embed-freetype")
+
+          feature_text = ", ".join(f'"{feature}"' for feature in features)
+          linux_section = (
+              linux_section[:match.start()]
+              + match.group(1)
+              + feature_text
+              + match.group(3)
+              + linux_section[match.end():]
+          )
+
+          cargo_toml.write_text(before + linux_section + after)
           PY
 
           grep -n 'skia-safe' Cargo.toml
@@ -262,3 +322,130 @@ jobs:
           name: neovide-rhel8-compat-reports
           path: reports/
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import mimetypes
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          token = os.environ["GITHUB_TOKEN"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          upstream_tag = os.environ["UPSTREAM_TAG"]
+          release_tag = f"{upstream_tag}-rhel8"
+          run_url = (
+              f"{os.environ['GITHUB_SERVER_URL']}/"
+              f"{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          )
+
+          api_base = f"https://api.github.com/repos/{repository}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def request_json(method, url, payload=None, extra_headers=None):
+              data = None
+              request_headers = dict(headers)
+              if extra_headers:
+                  request_headers.update(extra_headers)
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  request_headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  headers=request_headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(req) as response:
+                      body = response.read()
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", errors="replace")
+                  print(body, file=sys.stderr)
+                  raise
+              return json.loads(body.decode("utf-8")) if body else {}
+
+          try:
+              request_json("GET", f"{api_base}/releases/tags/{release_tag}")
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+          else:
+              raise SystemExit(f"Release {release_tag} already exists")
+
+          body = "\n".join(
+              [
+                  f"RHEL 8 x86_64 build for upstream Neovide {upstream_tag}.",
+                  "",
+                  "Built in a Rocky Linux 8.10 container to keep the glibc",
+                  "baseline close to RHEL 8.10 / glibc 2.28.",
+                  "",
+                  f"Workflow run: {run_url}",
+                  "",
+                  "Assets:",
+                  "- neovide-rhel8-x86_64.tar.gz",
+                  "- rhel8-compat-report.txt",
+              ]
+          )
+
+          release = request_json(
+              "POST",
+              f"{api_base}/releases",
+              {
+                  "tag_name": release_tag,
+                  "name": f"Neovide {upstream_tag} for RHEL 8 x86_64",
+                  "body": body,
+                  "draft": False,
+                  "prerelease": False,
+              },
+          )
+
+          upload_url = release["upload_url"].split("{", 1)[0]
+          assets = [
+              Path("neovide-rhel8-x86_64.tar.gz"),
+              Path("reports/rhel8-compat-report.txt"),
+          ]
+
+          for asset in assets:
+              content_type = mimetypes.guess_type(asset.name)[0] or "application/octet-stream"
+              upload_endpoint = (
+                  upload_url + "?" + urllib.parse.urlencode({"name": asset.name})
+              )
+              data = asset.read_bytes()
+              req = urllib.request.Request(
+                  upload_endpoint,
+                  data=data,
+                  headers={
+                      **headers,
+                      "Content-Type": content_type,
+                      "Content-Length": str(len(data)),
+                  },
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(req) as response:
+                      uploaded = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", errors="replace")
+                  print(body, file=sys.stderr)
+                  raise
+              print(f"Uploaded {uploaded['name']} to {release['html_url']}")
+
+          print(f"Created release {release_tag}: {release['html_url']}")
+          PY
