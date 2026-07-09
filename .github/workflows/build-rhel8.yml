@@ -101,12 +101,55 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Resolve upstream tag
+        id: upstream
+        if: ${{ inputs.upstream_tag != '' }}
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+
+          input="$UPSTREAM_TAG"
+          without_v="${input#v}"
+          candidates=("$input")
+          if [ "$without_v" != "$input" ]; then
+            candidates+=("$without_v")
+          else
+            candidates+=("v$input")
+          fi
+
+          checkout_ref=""
+          for candidate in "${candidates[@]}"; do
+            if git ls-remote --exit-code --tags --refs \
+              https://github.com/neovide/neovide.git "refs/tags/$candidate" >/dev/null; then
+              checkout_ref="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$checkout_ref" ]; then
+            echo "Could not find upstream tag '$input'. Tried: ${candidates[*]}"
+            exit 1
+          fi
+
+          release_version="$without_v"
+          release_tag="v${release_version}-rhel8"
+
+          {
+            echo "checkout_ref=$checkout_ref"
+            echo "release_version=$release_version"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved upstream tag '$input' to checkout ref '$checkout_ref'"
+          echo "RHEL8 release tag will be '$release_tag'"
+
       - name: Checkout upstream tag
         if: ${{ inputs.upstream_tag != '' }}
         uses: actions/checkout@v4
         with:
           repository: neovide/neovide
-          ref: ${{ inputs.upstream_tag }}
+          ref: ${{ steps.upstream.outputs.checkout_ref }}
           fetch-depth: 0
 
       - name: Validate release inputs
@@ -330,7 +373,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.checkout_ref }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+          RELEASE_VERSION: ${{ steps.upstream.outputs.release_version }}
         run: |
           python3 - <<'PY'
           import json
@@ -345,7 +390,8 @@ jobs:
           token = os.environ["GITHUB_TOKEN"]
           repository = os.environ["GITHUB_REPOSITORY"]
           upstream_tag = os.environ["UPSTREAM_TAG"]
-          release_tag = f"{upstream_tag}-rhel8"
+          release_tag = os.environ["RELEASE_TAG"]
+          release_version = os.environ["RELEASE_VERSION"]
           run_url = (
               f"{os.environ['GITHUB_SERVER_URL']}/"
               f"{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
@@ -409,7 +455,7 @@ jobs:
               f"{api_base}/releases",
               {
                   "tag_name": release_tag,
-                  "name": f"Neovide {upstream_tag} for RHEL 8 x86_64",
+                  "name": f"Neovide v{release_version} for RHEL 8 x86_64",
                   "body": body,
                   "draft": False,
                   "prerelease": False,
